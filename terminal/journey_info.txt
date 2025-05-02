@@ -1,0 +1,6 @@
+Start: ~Your Start~
+Destination: ~Your Destination~
+
+
+---
+Line's above are read to determine your trains, buses, etc.
