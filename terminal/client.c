@@ -6,13 +6,34 @@
 #include <time.h>
 #define HTTPS_Port "443"
 
+// Number of Vehicles We Want to Display and get information on
+#define MAX_SIZE 4
+
 typedef struct {
-  char *id;
-  double TTA;
-  char *current_stop;
-  int num_stops_away;
-  char *process;
-} Vehichle;
+  char *id;           // Name of Vehicle
+  double TTA;         // Expected time of Arrival
+  char *current_stop; // Current Stop Name
+  int num_stops_away; // Number of stops from target
+  char *process;      // Process between stops
+} Vehicle;
+typedef Vehicle *vehicle_t;
+
+vehicle_t init_vehicle() {
+  vehicle_t v = (vehicle_t)malloc(sizeof(Vehicle));
+  v->id = NULL;
+  v->TTA = 0.0;
+  v->current_stop = NULL;
+  v->num_stops_away = -1;
+  v->process = NULL;
+  return v;
+}
+
+void free_vehicle(vehicle_t v) {
+  free(v->id);
+  free(v->current_stop);
+  free(v->process);
+  free(v);
+}
 
 /**
  * Helper function that translates ISO time into seconds from current
@@ -86,6 +107,25 @@ char *processJSON(cJSON *object) {
   return NULL;
 }
 
+/**
+ * Takes in JSON with data on Time of Arrival and the Vehicles ID and fills it
+ * into a given vehicles data. Throws: If vehicle already has data in it.
+ */
+void fill_TTA_ID(cJSON *object, vehicle_t vehicle) {
+  if (vehicle->id != NULL) {
+    fprintf(stderr,
+            "ERROR: vehichle is either not initiliazed or prepopulated\n");
+    exit(0);
+  }
+
+  cJSON *attributes = cJSON_GetObjectItemCaseSensitive(object, "attributes");
+  cJSON *arrival_time =
+      cJSON_GetObjectItemCaseSensitive(attributes, "arrival_time");
+  if (cJSON_IsString(arrival_time) && (arrival_time->valuestring != NULL)) {
+    vehicle->TTA = Seconds_from_Current(arrival_time->valuestring);
+  }
+}
+
 size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
   size_t real_size = size * nmemb;
   // printf("%.*s", (int)real_size, ptr);
@@ -108,6 +148,8 @@ int main(int argc, char *argv[]) {
    * Trains are inconsistent, provide stop data as well for accurate gauging
    */
   // curl_easy_setopt(); curl struct, type (CURLOPT_URL), request
+  vehicle_t veh = init_vehicle();
+
   CURL *curl;
   CURLcode res; // Result from request
   curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -120,6 +162,6 @@ int main(int argc, char *argv[]) {
 
   // Every Minute Send in One Request (1)
   // Grab two closest T's and two closest Buses and order them by time
-  // Then call the each Vehichle to get stop information
+  // Then call the each Vehichle to get stop information and stop name
   return 0;
 }
