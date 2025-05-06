@@ -8,6 +8,9 @@
 
 // Number of Vehicles We Want to Display and get information on
 #define MAX_SIZE 4
+#define MAX_ID_SIZE 32
+
+typedef enum { PREDICTION, VEHICLE } PARSE_TYPE;
 
 typedef struct {
   char *id;           // Name of Vehicle
@@ -119,26 +122,52 @@ void fill_TTA_ID(cJSON *object, vehicle_t vehicle) {
   }
 
   cJSON *attributes = cJSON_GetObjectItemCaseSensitive(object, "attributes");
+  cJSON *relationships =
+      cJSON_GetObjectItemCaseSensitive(object, "relationships");
+  cJSON *json_vehicle =
+      cJSON_GetObjectItemCaseSensitive(relationships, "vehicle");
   cJSON *arrival_time =
       cJSON_GetObjectItemCaseSensitive(attributes, "arrival_time");
   if (cJSON_IsString(arrival_time) && (arrival_time->valuestring != NULL)) {
     vehicle->TTA = Seconds_from_Current(arrival_time->valuestring);
   }
+
+  cJSON *id = cJSON_GetObjectItemCaseSensitive(
+      cJSON_GetObjectItemCaseSensitive(json_vehicle, "data"), "id");
+
+  vehicle->id = (char *)malloc(sizeof(char) * MAX_ID_SIZE);
+  strlcpy(vehicle->id, id->valuestring, sizeof(id->valuestring));
 }
 
-size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
-  size_t real_size = size * nmemb;
-  // printf("%.*s", (int)real_size, ptr);
+struct memory {
+  char *response;
+  size_t size;
+};
+
+size_t write_callback(char *data, size_t size, size_t nmemb, void *userdata) {
+  size_t realsize = size * nmemb;
+  struct memory *mem = (struct memory *)userdata;
+  char *ptr = realloc(mem->response, mem->size + realsize + 1);
+  if (ptr == NULL)
+    return 0; /* out of memory! */
+
+  mem->response = ptr;
+  memcpy(&(mem->response[mem->size]), data, realsize);
+  mem->size += realsize;
+  mem->response[mem->size] = 0;
+
+  return realsize;
 
   cJSON *json = cJSON_Parse(ptr);
   // printf("\n");
   fprintf(stderr, "%s\n", cJSON_Print(json));
   cJSON *allObjects = cJSON_GetObjectItemCaseSensitive(json, "data");
   cJSON *object = NULL;
-
+  int first = 1;
   cJSON_ArrayForEach(object, allObjects) { processJSON(object); }
-  return real_size;
 }
+
+void parse_response() {}
 
 int main(int argc, char *argv[]) {
   // 1 means inbound 0 means outbound
@@ -152,12 +181,18 @@ int main(int argc, char *argv[]) {
 
   CURL *curl;
   CURLcode res; // Result from request
+
+  struct memory mem = {0};
   curl_global_init(CURL_GLOBAL_DEFAULT);
   curl = curl_easy_init();
   if (curl) {
     curl_easy_setopt(curl, CURLOPT_URL, magicPhrase);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+                     write_callback); // Need to add a write data structure
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&mem);
     res = curl_easy_perform(curl);
+
+    fprintf(stderr, "%s\n", mem.response);
   }
 
   // Every Minute Send in One Request (1)
