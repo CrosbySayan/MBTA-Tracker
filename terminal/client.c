@@ -8,7 +8,7 @@
 
 // Number of Vehicles We Want to Display and get information on
 #define MAX_SIZE 4
-#define MAX_ID_SIZE 32
+#define MAX_ID_SIZE 64
 
 typedef enum { PREDICTION, VEHICLE } PARSE_TYPE;
 
@@ -97,22 +97,14 @@ double Seconds_from_Current(const char *timestamp) {
 
   return difftime(arr_time, current_time);
 }
-/**
- * Turns our JSON request of a given prediction into human readable format.
- */
-char *processJSON(cJSON *object) {
-  cJSON *attributes = cJSON_GetObjectItemCaseSensitive(object, "attributes");
-  cJSON *arrTime = cJSON_GetObjectItemCaseSensitive(attributes, "arrival_time");
-  fprintf(stderr, "%s\n", arrTime->valuestring);
-  double time = Seconds_from_Current(arrTime->valuestring);
-  fprintf(stderr, "%.2f SECS\n", time);
-  fprintf(stderr, "%.2f MINS\n", (time / 60));
-  return NULL;
-}
 
 /**
  * Takes in JSON with data on Time of Arrival and the Vehicles ID and fills it
- * into a given vehicles data. Throws: If vehicle already has data in it.
+ * into a given vehicles data.
+ * object: JSON for the prediction filter for this given vehicle.
+ * vehicle: item in the list of diplayed vehicles on route.
+ *
+ * Throws: If vehicle already has data in it.
  */
 void fill_TTA_ID(cJSON *object, vehicle_t vehicle) {
   if (vehicle->id != NULL) {
@@ -157,19 +149,108 @@ size_t write_callback(char *data, size_t size, size_t nmemb, void *userdata) {
   mem->response[mem->size] = 0;
 
   return realsize;
-
-  cJSON *json = cJSON_Parse(ptr);
-  // printf("\n");
-  fprintf(stderr, "%s\n", cJSON_Print(json));
-  cJSON *allObjects = cJSON_GetObjectItemCaseSensitive(json, "data");
-  cJSON *object = NULL;
-  int first = 1;
-  cJSON_ArrayForEach(object, allObjects) { processJSON(object); }
 }
 
-void parse_response() {}
+/**
+ * Parses and fills in Time to Arrival Data and ID data for up to MAX_SIZE
+ * Vehichles in a given query. data: a cJSON representation of MBTA prediction
+ * fields for a given filter. list: a list of MAX_SIZE that represents the
+ * number of Vehicles we want to display and query at a given time.
+ * ---
+ * TBA: Limit testing(i.e. max size larger than query)
+ */
+void handle_Predictions(cJSON *data, vehicle_t list[MAX_SIZE]) {
+  cJSON *allObjects = cJSON_GetObjectItemCaseSensitive(data, "data");
+  cJSON *object = NULL;
+
+  int count = 0;
+  cJSON_ArrayForEach(object, allObjects) {
+    if (count >= MAX_SIZE) {
+      break;
+    }
+    fill_TTA_ID(object, list[count]);
+    count++;
+  }
+}
+
+/**
+ * Goes through a list of vehicles that has prediction times and ID's and
+ * fetches their current location. list: list of vehicles
+ *
+ * WARNING: This will be where most of your API calls will be chewed up on (1
+ * call per Vehicle), if the following information isn't useful then remove the
+ * function.
+ *  - Number of stops the Vehicle is from the desired stop
+ *  - It's current stop location
+ *  - The process it is doing (i.e. STOPPED, INCOMING, etc)
+ */
+void get_real_time_pos(vehicle_t list[MAX_SIZE]) {
+  if (list[0]->id == NULL) {
+    fprintf(stderr, "LIST HAS NOT RECEIVED PREDICTION DATA\n");
+    exit(0);
+  }
+
+  char *startphrase = "https://api-v3.mbta.com/vehicles/";
+  char *includes = "?include=stop";
+  char brackets[MAX_SIZE * MAX_ID_SIZE + 10];
+  brackets[0] = '\0';
+  strlcat(brackets, "{", sizeof(brackets));
+  for (int i = 0; i < MAX_SIZE; i++) {
+    // char buffer[strlen(startphrase) + strlen(includes) + MAX_ID_SIZE + 1];
+    // buffer[0] = '\0';
+    // strlcat(buffer, startphrase, sizeof(buffer));
+    // strlcat(buffer, list[i]->id, sizeof(buffer));
+    // strlcat(buffer, includes, sizeof(buffer));
+    // fprintf(stderr, "%s\n", buffer);
+
+    size_t pos = strlcat(brackets, list[i]->id, sizeof(brackets));
+    if (i + 1 >= MAX_SIZE) {
+      brackets[pos] = '}';
+      brackets[pos + 1] = '\0';
+    } else {
+      brackets[pos] = ',';
+    }
+  }
+  char buffer[strlen(startphrase) + strlen(includes) + strlen(brackets) + 1];
+  buffer[0] = '\0';
+  strlcat(buffer, startphrase, sizeof(buffer));
+  strlcat(buffer, brackets, sizeof(buffer));
+  strlcat(buffer, includes, sizeof(buffer));
+
+  fprintf(stderr, "%s\n", buffer);
+  CURL *curl;
+  CURLcode res;
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  curl = curl_easy_init();
+}
+
+/**
+ * Routes JSON parsing and handling to the different types of functions to fill
+ * in Vehicle data.
+ *
+ * mem: raw data returned from CURL operation.
+ * list: a list of MAX_SIZE of vehicles to be displayed.
+ * type: the type of processing this data will go through
+ */
+void parse_response(struct memory *mem, vehicle_t list[MAX_SIZE],
+                    PARSE_TYPE type) {
+  // Turn raw data into cJSON first.
+  cJSON *data = cJSON_Parse(mem->response);
+  // fprintf(stderr, "%s\n", cJSON_Print(data));
+  switch (type) {
+  case PREDICTION:
+    handle_Predictions(data, list);
+    break;
+  case VEHICLE:
+    break;
+  default:
+    fprintf(stderr, "Type not implemented yet, printing raw data:\n%s\n",
+            mem->response);
+  }
+}
 
 int main(int argc, char *argv[]) {
+
   // 1 means inbound 0 means outbound
   /**
    * ToDo:
@@ -177,7 +258,10 @@ int main(int argc, char *argv[]) {
    * Trains are inconsistent, provide stop data as well for accurate gauging
    */
   // curl_easy_setopt(); curl struct, type (CURLOPT_URL), request
-  vehicle_t veh = init_vehicle();
+  vehicle_t list[MAX_SIZE];
+  for (int i = 0; i < MAX_SIZE; i++) {
+    list[i] = init_vehicle();
+  }
 
   CURL *curl;
   CURLcode res; // Result from request
@@ -192,11 +276,21 @@ int main(int argc, char *argv[]) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&mem);
     res = curl_easy_perform(curl);
 
-    fprintf(stderr, "%s\n", mem.response);
+    parse_response(&mem, list, PREDICTION);
+    for (int i = 0; i < MAX_SIZE; i++) {
+      fprintf(stderr, "%s: %.2f SECS | %.2f MINS\n", list[i]->id, list[i]->TTA,
+              list[i]->TTA / 60);
+    }
+
+    get_real_time_pos(list);
   }
 
   // Every Minute Send in One Request (1)
   // Grab two closest T's and two closest Buses and order them by time
   // Then call the each Vehichle to get stop information and stop name
+
+  for (int i = 0; i < MAX_SIZE; i++) {
+    free_vehicle(list[i]);
+  }
   return 0;
 }
